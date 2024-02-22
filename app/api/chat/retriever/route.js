@@ -16,12 +16,12 @@ export async function POST(req) {
   const input = newMessage.content;
 
   //pdf documents loaded
-  const pdfBookPath = "link to you pdf document";
+  const pdfBookPath = "your pdf file path";
   const pdfLoader = new PDFLoader(pdfBookPath);
   const pdfDocs = await pdfLoader.load();
 
   //CSV documents loader
-  const csvBookPath = "link to your csv document";
+  const csvBookPath = "your csv file path";
   const csvLoader = new CSVLoader(csvBookPath);
   const csvDocs = await csvLoader.load();
 
