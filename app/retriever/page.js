@@ -5,31 +5,29 @@ import { useState } from "react";
 
 export default function Retriever() {
   const [input, setInput] = useState("");
+  const [message, setMessage] = useState({
+    role: "user",
+    content: "",
+  });
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    // Create a new message object with the input content
-    const newMessage = {
-      content: input,
-      role: "user",
-    };
-
-    // Add the new message to the messages state
-    setMessages((prev) => [...prev, newMessage]);
-    setInput("");
-
-    // Send the messages array to the API
     setIsLoading(true);
-    const response = await axios.post("/api/chat/retriever", {
-      newMessage,
-    });
+    // Add the new message to the messages state
+    setMessages((prev) => [...prev, message]);
+    setMessage({ ...message, content: "" });
 
+    //send messages to API
+    const response = await axios.post("/api/chat/retriever", {
+      messages: [...messages, message],
+    });
+    //update messages with response from model
     setMessages((prev) => [
       ...prev,
-      { content: response.data, role: "system" },
+      { role: "system", content: response.data },
     ]);
     setIsLoading(false);
     console.log("response.data", response.data);
@@ -53,8 +51,10 @@ export default function Retriever() {
       <form onSubmit={handleSubmit} className="flex">
         <input
           placeholder="Ask about socially responsible shopping choices "
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
+          value={message.content}
+          onChange={(e) =>
+            setMessage({ role: "user", content: e.target.value })
+          }
           className="text-black"
         />
         <button className="px-2 py-1 ml-2 bg-green-400 rounded-lg">send</button>

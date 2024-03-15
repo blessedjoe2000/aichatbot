@@ -6,67 +6,86 @@ import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { createStuffDocumentsChain } from "langchain/chains/combine_documents";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
-import { createHistoryAwareRetriever } from "langchain/chains/history_aware_retriever";
-import { MessagesPlaceholder } from "@langchain/core/prompts";
-import { HumanMessage, AIMessage } from "@langchain/core/messages";
 
-export async function POST(req) {
-  const { newMessage } = await req.json();
-
-  const input = newMessage.content;
-
+async function loadAndStoreDocuments() {
   //pdf documents loaded
-  const pdfBookPath = "your pdf file path";
+  const pdfBookPath =
+    "/Users/joetalker/Desktop/masterschool/projects/langchain/documents/The_Better_World_Shopping_Guide_6th_Edit.pdf";
   const pdfLoader = new PDFLoader(pdfBookPath);
   const pdfDocs = await pdfLoader.load();
 
   //CSV documents loader
-  const csvBookPath = "your csv file path";
+  const csvBookPath =
+    "/Users/joetalker/Desktop/masterschool/projects/langchain/documents/Research.Spreadsheet.-.Corporate.Knights.csv";
   const csvLoader = new CSVLoader(csvBookPath);
   const csvDocs = await csvLoader.load();
 
   //combine pdf and csv documents
   const allDocs = [...pdfDocs, ...csvDocs];
 
+  const splitter = new RecursiveCharacterTextSplitter();
+  const splitDocs = await splitter.splitDocuments(allDocs);
+
+  const embeddings = new OpenAIEmbeddings();
+
+  const vectStoStartTime = Date.now();
+  //Declear vectorstore
+  const vectorstore = await MemoryVectorStore.fromDocuments(
+    splitDocs,
+    embeddings
+  );
+
+  const vectStoEndTime = Date.now();
+  const vectStoElapsedTime = (vectStoEndTime - vectStoStartTime) / 1000;
+
+  console.log("Time take for vector store:", vectStoElapsedTime, "seconds");
+
+  return vectorstore;
+}
+
+const vectorstorePromise = loadAndStoreDocuments().then((vectorstore) => {
+  // Declear openAI model
+  const model = new ChatOpenAI({
+    modelName: "gpt-3.5-turbo",
+    temperature: 0.5,
+  });
+
+  //create chat prompt for the model
+  const prompt = ChatPromptTemplate.fromTemplate(
+    `You're a chat bot name BetterBot, for a company called Better World. You are to Answer the question based only on the following context and chat history:
+
+  If you do not know the answer, please respond with apologies, can you elaborate better to make me understand your query. Do not respond with "based on the context provided", do not respond like you were given a context, respond like you are independent. Make response detailed and concised.
+
+  
+  <context>
+    {context}
+  </context>.
+  
+  <chat_history>
+    {chat_history}
+  </chat_history>
+
+  Question: {input}
+  `
+  );
+
+  return createStuffDocumentsChain({
+    llm: model,
+    prompt,
+  }).then((documentChain) => {
+    return { vectorstore, documentChain };
+  });
+});
+
+export async function POST(req) {
+  const overallStartTime = Date.now();
   try {
-    // Declear openAI model
-    const model = new ChatOpenAI({
-      modelName: "gpt-3.5-turbo",
-      temperature: 0.5,
-    });
+    const { messages } = await req.json();
+    const input = messages[messages.length - 1].content;
 
-    const splitter = new RecursiveCharacterTextSplitter();
-    const splitDocs = await splitter.splitDocuments(allDocs);
+    const chatHistory = messages;
 
-    // console.log("splitDocs", splitDocs);
-
-    const embeddings = new OpenAIEmbeddings();
-
-    //Declear vectorstore
-    const vectorstore = await MemoryVectorStore.fromDocuments(
-      splitDocs,
-      embeddings
-    );
-
-    //create chat prompt for the model
-    const prompt = ChatPromptTemplate.fromTemplate(
-      `You're a chat bot name BetterBot, for a company called Better World. You are to answer the following question based only on the provided context:
-      <context>
-        {context}
-      </context>.
-      
-      If you do not know the answer, please respond with apologies, can you elaborate better to make me understand your query.
-
-      Question: {input}
-      `
-    );
-
-    //create document chain
-    const documentChain = await createStuffDocumentsChain({
-      llm: model,
-      prompt,
-    });
-
+    const { vectorstore, documentChain } = await vectorstorePromise;
     //declear retriever
     const retriever = vectorstore.asRetriever();
 
@@ -74,60 +93,24 @@ export async function POST(req) {
     const retrieverChain = await createRetrievalChain({
       combineDocsChain: documentChain,
       retriever,
+      chat_history: chatHistory,
     });
 
+    const resultStartTime = Date.now();
     const result = await retrieverChain.invoke({
       input: input,
     });
 
-    //create chat prompt template with chat history
-    const historyAwarePrompt = ChatPromptTemplate.fromMessages([
-      new MessagesPlaceholder("chat_history"),
-      ["user", "{input}"],
-      [
-        "user",
-        "Given the above conversation, generate a search query to look up in order to get information relevant to the conversation",
-      ],
-    ]);
+    const resultEndTime = Date.now();
+    const resultElapsedTime = (resultEndTime - resultStartTime) / 1000;
 
-    const historyAwareRetrieverChain = await createHistoryAwareRetriever({
-      llm: model,
-      retriever,
-      rephrasePrompt: historyAwarePrompt,
-    });
+    console.log("Time taken for result:", resultElapsedTime, "seconds");
 
-    const chatHistory = [new HumanMessage(input), new AIMessage(result.answer)];
+    const overallEndTime = Date.now();
+    const overallElapsedTime = (overallEndTime - overallStartTime) / 1000;
+    console.log("Overall runtime:", overallElapsedTime, "seconds");
 
-    await historyAwareRetrieverChain.invoke({
-      chat_history: chatHistory,
-      input: input,
-    });
-
-    const historyAwareRetrieverPrompt = ChatPromptTemplate.fromMessages([
-      [
-        "system",
-        "Answer the user's questions based on the below context: \n\n {context}",
-      ],
-      new MessagesPlaceholder("chat_history"),
-      ["user", "{input}"],
-    ]);
-
-    const historyAwareCombineDocsChain = await createStuffDocumentsChain({
-      llm: model,
-      prompt: historyAwareRetrieverPrompt,
-    });
-
-    const conversationalRetrievalChain = await createRetrievalChain({
-      retriever: historyAwareRetrieverChain,
-      combineDocsChain: historyAwareCombineDocsChain,
-    });
-
-    const conversationalResult = await conversationalRetrievalChain.invoke({
-      chat_history: chatHistory,
-      input: input,
-    });
-
-    return new Response(JSON.stringify(conversationalResult.answer), {
+    return new Response(JSON.stringify(result.answer), {
       status: 200,
     });
   } catch (error) {
